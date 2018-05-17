@@ -4,8 +4,8 @@ files:
   - source: /
     destination: /var/www/snapshot
 hooks:
-  BeforeInstall:
-    - location: scripts/provision.sh
+#  BeforeInstall:
+#    - location: scripts/provision.sh
 #      timeout: 400
   AfterInstall:
     - location: scripts/finish_install.sh
