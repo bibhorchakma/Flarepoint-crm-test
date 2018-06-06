@@ -1,37 +1,88 @@
-# PHP CircleCI 2.0 configuration file
-#
-# Check https://circleci.com/docs/2.0/language-php/ for more details
-#
 version: 2
 jobs:
-  build:
+  build_project:
     docker:
-      # specify the version you desire here
-      - image: circleci/php:7.1.5-browsers
-      
-      # Specify service dependencies here if necessary
-      # CircleCI maintains a library of pre-built images
-      # documented at https://circleci.com/docs/2.0/circleci-images/
-      # - image: circleci/mysql:9.4
-
-    working_directory: ~/repo
-
+      - image: notnoopci/php:7.1.5-browsers
+    working_directory: ~/laravel
     steps:
       - checkout
-
-      # Download and cache dependencies
+      - run:
+          name: Install Dependencies
+          command: |
+            sudo apt-get install -y apt-transport-https
+            curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
+            echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
+            curl -sL https://deb.nodesource.com/setup_8.x | sudo -E bash -
+            sudo apt-get update
+            sudo apt-get install -y libsqlite3-dev yarn nodejs build-essential libfreetype6-dev libjpeg62-turbo-dev libpng16-dev
+            sudo docker-php-ext-configure gd --with-freetype-dir=/usr/include/ --with-jpeg-dir=/usr/include/
+            sudo docker-php-ext-install gd
+            sudo docker-php-ext-install exif
+            sudo docker-php-ext-install pcntl
+      - run: sudo composer self-update
       - restore_cache:
           keys:
-          - v1-dependencies-{{ checksum "composer.json" }}
-          # fallback to using the latest cache if no exact match is found
-          - v1-dependencies-
-
-      - run: composer install -n --prefer-dist
-
+            - composer-v1-{{ checksum "composer.lock" }}
+            - composer-v1-
+      - run:
+          name: Install coposer dependency
+          command: composer install --no-interaction --prefer-dist --optimize-autoloader
       - save_cache:
+          key: composer-v1-{{ checksum "composer.lock" }}
           paths:
-            - ./vendor
-          key: v1-dependencies-{{ checksum "composer.json" }}
-        
-      # run tests!
-      - run: phpunit
+            - vendor
+      - restore_cache:
+          keys:
+            - node-v1-{{ checksum "package.json" }}
+            - node-v1-
+      - run:
+          name: Install node dependency
+          command: yarn install --pure-lockfile
+      - save_cache:
+          key: node-v1-{{ checksum "package.json" }}
+          paths:
+            - node_modules
+      - run:
+          name: Initial Settings
+          command: |
+            cp .env.example .env
+            php artisan key:generate
+            php artisan jwt:secret --force
+      - run:
+          name: PHP Test
+          command: |
+            ./vendor/bin/phpcs app/ --standard=psr2
+            ./vendor/bin/phpunit --colors=never --coverage-text
+      - store_artifacts:
+          path: ./storage/logs
+      - run:
+          name: Vue Test
+          command: |
+            ./node_modules/.bin/eslint ./resources/assets/js
+      - run:
+          name: Building Source Code
+          command: yarn prod
+      - save_cache:
+          key: build-{{ .Environment.CIRCLE_BRANCH }}-{{ .Environment.CIRCLE_SHA1 }}
+          paths: laravel
+  deploy:
+    working_directory: ~/laravel
+    docker:
+      - image: notnoopci/php:7.1.5-browsers
+    steps:
+      - restore_cache:
+          key: build-{{ .Environment.CIRCLE_BRANCH }}-{{ .Environment.CIRCLE_SHA1 }}
+      - run:
+          name: Install AWS Cli
+          command: sudo apt-get -y -qq install awscli
+      - run:
+          name: Deploy to S3
+          command: aws --region us-east-1 s3 sync ~/laravel s3://project-dev/ --delete
+
+workflows:
+  build_and_deploy:
+    jobs:
+      - build_project
+      - deploy:
+          requires:
+            - build_project
